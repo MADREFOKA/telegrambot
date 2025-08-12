@@ -24,6 +24,10 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
+@app.route("/")
+def home():
+    return "✅ Bot funcionando en Railway", 200
+
 bot = Bot(token=BOT_TOKEN)
 
 conn = sqlite3.connect('db.sqlite', check_same_thread=False)
@@ -120,5 +124,5 @@ def telegram_webhook():
     return "OK", 200
 
 if __name__ == "__main__":
-    application.bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    app.run(host="0.0.0.0", port=PORT)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
