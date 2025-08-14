@@ -1,4 +1,3 @@
-# bot.py — Telegram (polling) + Flask /callback (Railway o similar)
 # Flujo:
 #  - /link_canal  -> el dueño autoriza channel:read:subscriptions -> guardamos token del canal en BD
 #  - /start       -> el usuario autoriza -> vinculamos twitch_id y comprobamos sub usando el token del canal
@@ -15,12 +14,12 @@ from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# ========= Variables de entorno =========
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
-TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
-TWITCH_CHANNEL_ID = os.getenv("TWITCH_CHANNEL_ID")        # ID numérico del canal (str o int)
-TWITCH_REDIRECT_URI = os.getenv("TWITCH_REDIRECT_URI")    # p.ej. https://tu-app.up.railway.app/callback
+# ========= VARIABLES DE ENTORNO. Cambiar en servicio web =========
+BOT_TOKEN = os.getenv("BOT_TOKEN") # Token del bot de telegram
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID") # ID cliente de Twitch
+TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET") # Secret client de Twitch
+TWITCH_CHANNEL_ID = os.getenv("TWITCH_CHANNEL_ID") # Channel ID de Twitch
+TWITCH_REDIRECT_URI = os.getenv("TWITCH_REDIRECT_URI") # Redirect puesto en Twitch develops. Ej. https://{Servicio web}/callback
 PORT = int(os.environ.get("PORT", 5000))
 
 required = {
@@ -35,11 +34,9 @@ for k, v in required.items():
         raise ValueError(f"Falta variable de entorno: {k}")
 
 TWITCH_CHANNEL_ID = str(TWITCH_CHANNEL_ID).strip()  # normaliza para comparar
-
-# ========= Logging =========
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 
-# ========= SQLite =========
+# ========= Base de datos de telegram y twitch =========
 conn = sqlite3.connect("db.sqlite", check_same_thread=False)
 c = conn.cursor()
 c.execute("""
@@ -96,7 +93,6 @@ def get_valid_broadcaster_token():
     save_broadcaster_tokens(broadcaster_id, new["access_token"], new.get("refresh_token", refresh_token), new.get("expires_in", 3600))
     return broadcaster_id, new["access_token"]
 
-# ========= Flask =========
 app = Flask(__name__)
 
 @app.route("/")
@@ -104,7 +100,6 @@ def home():
     return "✅ Flask OK /callback listo", 200
 
 def send_telegram_sync(chat_id: int, text: str):
-    # Envío síncrono (evita problemas de event loop entre hilos)
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
         requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=20)
@@ -121,7 +116,6 @@ def twitch_callback():
             logging.error("Callback sin code/state: %s", dict(request.args))
             return "Faltan parámetros 'code' o 'state'", 400
 
-        # Intercambiar code por tokens
         token_resp = requests.post(
             "https://id.twitch.tv/oauth2/token",
             data={
@@ -141,7 +135,6 @@ def twitch_callback():
         refresh_token = token_resp.get("refresh_token")
         expires_in = token_resp.get("expires_in", 3600)
 
-        # Datos del usuario del token recién emitido
         user_resp = requests.get(
             "https://api.twitch.tv/helix/users",
             headers={
@@ -157,27 +150,21 @@ def twitch_callback():
         twitch_user = user_resp["data"][0]
         twitch_id = str(twitch_user["id"])
 
-        # ===== Flujo OWNER: /link_canal =====
+        # ===== Flujo para el OWNER: /link_canal =====
         if state.startswith("owner:"):
-            # Solo aceptamos si el que autoriza ES el canal configurado
             if twitch_id != TWITCH_CHANNEL_ID:
                 return "El usuario autorizado no coincide con el canal configurado.", 400
             if not refresh_token:
                 return "No se recibió refresh_token para el broadcaster (necesario).", 400
             save_broadcaster_tokens(twitch_id, access_token, refresh_token, expires_in)
-            return "✔️ Canal vinculado. Ya puedo comprobar suscripciones.", 200
+            return "✔️ Canal del streamer vinculado. Ya puedo comprobar suscripciones.", 200
 
-        # ===== Flujo USER: /start =====
         chat_id = int(state)
-
-        # Guardar vínculo del usuario
         c.execute(
             "REPLACE INTO users (telegram_id, twitch_id, access_token) VALUES (?, ?, ?)",
             (chat_id, twitch_id, access_token)
         )
         conn.commit()
-
-        # Obtener token válido del canal (broadcaster)
         try:
             broadcaster_id, broadcaster_token = get_valid_broadcaster_token()
         except Exception as e:
@@ -185,7 +172,6 @@ def twitch_callback():
             send_telegram_sync(chat_id, "⚠️ El canal aún no está vinculado. El dueño debe ejecutar /link_canal y autorizar.")
             return "Falta token del canal. Pida al dueño que haga /link_canal.", 200
 
-        # Comprobar suscripción con token del broadcaster
         sub_resp = requests.get(
             "https://api.twitch.tv/helix/subscriptions",
             headers={
@@ -197,7 +183,7 @@ def twitch_callback():
         ).json()
 
         if "data" in sub_resp and len(sub_resp["data"]) > 0:
-            text = "✅ ¡Eres suscriptor! Enlace al grupo: https://t.me/+pjcgoeLWrOxmMTk0"
+            text = "✅ ¡Eres suscriptor! Enlace al grupo:" # Insertar enlace del grupo de Telegram
         else:
             text = "❌ No estás suscrito al canal de Twitch."
 
@@ -211,13 +197,11 @@ def run_flask():
     logging.info("Iniciando Flask en puerto %s", PORT)
     app.run(host="0.0.0.0", port=PORT)
 
-# ========= Telegram (POLLING) =========
 application = Application.builder().token(BOT_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info("/start de chat_id=%s", update.effective_chat.id)
     chat_id = update.effective_chat.id
-    # Para el usuario normal no necesitamos scope de canal; solo obtener su twitch_id
     auth_url = (
         "https://id.twitch.tv/oauth2/authorize"
         f"?client_id={TWITCH_CLIENT_ID}"
@@ -229,7 +213,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def link_canal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info("/link_canal por chat_id=%s", update.effective_chat.id)
-    # Si quieres restringirlo al dueño por Telegram ID, compruébalo aquí.
+    # Aqui por si quieres poner restricciones segun TelegramId o TwitchNick.
     scope = "channel:read:subscriptions"
     state = f"owner:{update.effective_chat.id}"
     auth_url = (
@@ -247,18 +231,15 @@ async def link_canal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("link_canal", link_canal))
 
-# ========= Arranque =========
 if __name__ == "__main__":
-    # Asegura que NO hay webhook activo (si lo hubo antes), para no bloquear el polling
     try:
         r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook", timeout=10)
         logging.info("deleteWebhook: %s %s", r.status_code, r.text)
     except Exception as e:
         logging.warning("No se pudo borrar webhook: %s", e)
 
-    # Levanta Flask en un hilo
     Thread(target=run_flask, daemon=True).start()
 
-    # Bot en polling (hilo principal)
     logging.info("Iniciando polling de Telegram…")
     application.run_polling(drop_pending_updates=True)
+
