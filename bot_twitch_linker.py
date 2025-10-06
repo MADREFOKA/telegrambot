@@ -1,36 +1,47 @@
 """
-Telegram–Twitch Sub Bot
+Telegram–Twitch Sub-Gate Bot
 ---------------------------------
 
-¿Qué hace?
+What it does
 ============
-- Cuando un usuario abre el bot a través de un enlace o /start, envía un mensaje directo con un enlace de inicio de sesión de Twitch OAuth para verificar su cuenta de Twitch.
-- Después de iniciar sesión, el bot vincula su ID de Telegram <-> ID de Twitch en SQLite.
-- El bot comprueba si están suscritos al canal de Twitch configurado y, si es así, les envía un enlace de invitación a un grupo de Telegram. Si no es así, se lo notifica.
-- Semanalmente, el bot audita el grupo y expulsa a los miembros que ya no están suscritos.
-- Admite múltiples canales: un difusor (propietario/moderador del canal) puede ejecutar /setup para conceder al bot el ámbito «channel:read:subscriptions» y vincular un grupo de Telegram de destino utilizando /setgroup.
+- When a user opens the bot via link or /start, it DMs a Twitch OAuth login link to verify their Twitch account.
+- After login, the bot links their Telegram ID <-> Twitch ID in SQLite.
+- The bot checks if they are subscribed to the configured Twitch channel and, if so, sends them an invite link to a Telegram group. If not, it notifies them.
+- Weekly, the bot audits the group and kicks members who are no longer subscribed.
+- Supports multi-channel: a broadcaster (channel owner/mod) can run /setup to grant the bot the scope `channel:read:subscriptions` and bind a target Telegram group using /setgroup.
 
-Entorno
+Tech stack
+==========
+- Python 3.10+
+- python-telegram-bot (v20+)
+- Flask (for OAuth callbacks)
+- aiohttp for Twitch API
+- APScheduler via PTB JobQueue
+- SQLite (file-based DB)
+
+Environment
 ===========
-Crea un archivo `.env` con:
+Create a `.env` with:
 
 TELEGRAM_BOT_TOKEN=123456:ABC...
-FLASK_SECRET= {code secreto (puede ser una frase)}
-OAUTH_CLIENT_ID=twitch_client_id
-OAUTH_CLIENT_SECRET=twitch_client_secret
-BASE_URL=https://your.public.domain
+FLASK_SECRET=change_me
+OAUTH_CLIENT_ID=your_twitch_client_id
+OAUTH_CLIENT_SECRET=your_twitch_client_secret
+BASE_URL=https://your.public.domain (no trailing slash; used for OAuth redirect)
+# Optional: default timezone name for jobs
 TZ=Europe/Madrid
 
-Ejecutar
+Run
 ===
 $ pip install python-telegram-bot==20.8 aiohttp Flask python-dotenv aiosqlite
 $ python bot_twitch_linker.py
 
-Notas
+Notes
 =====
-- El bot debe ser administrador del grupo de destino y tener derechos para invitar a usuarios y eliminar miembros.
-- Configuración de la aplicación Twitch: añade la URL de redireccionamiento: {BASE_URL}/twitch/callback y {BASE_URL}/twitch/setup/callback
-- Telegram: desactiva el modo de privacidad si deseas capturar las actualizaciones de chat_member en los grupos.
+- The bot must be an admin in the target group with rights to invite users and remove members.
+- For local dev, use a tunneler (e.g., ngrok) to expose Flask callback: set BASE_URL to your https ngrok URL.
+- Twitch App Settings: add redirect URL: {BASE_URL}/twitch/callback and {BASE_URL}/twitch/setup/callback
+- Telegram: enable privacy mode off if you want to capture chat_member updates in groups.
 
 """
 from __future__ import annotations
@@ -338,7 +349,7 @@ def twitch_callback_user():
             telegram_id, twitch_id, int(time.time()),
         ))
         # Ack to user via bot
-        asyncio.run(send_async_message(telegram_id, f"✅ Vinculación completada " **{display_name or login}** ". Ahora comprobaré tu suscripción…"))
+        asyncio.run(send_async_message(telegram_id, f"✅ Vinculación completada: Twitch **{display_name or login}** ↔️ Telegram. Ahora comprobaré tu suscripción…"))
         # Find broadcaster config (simple use-case: last one)
         b = asyncio.run(db_fetchone("SELECT * FROM broadcasters ORDER BY rowid DESC LIMIT 1"))
         if not b:
@@ -380,8 +391,7 @@ def twitch_callback_setup():
             "VALUES (?,?,?,?,?,?, COALESCE((SELECT group_id FROM broadcasters WHERE broadcaster_id=?), NULL), COALESCE((SELECT invite_link FROM broadcasters WHERE broadcaster_id=?), NULL))",
             broadcaster_id, owner_tid, access_token, refresh_token or "", int(time.time()), int(expires_in), broadcaster_id, broadcaster_id
         ))
-        asyncio.run(send_async_message(owner_tid,
-                    "✅ Canal vinculado como broadcaster.\n\nAhora ejecuta /setgroup dentro del grupo objetivo."))
+        asyncio.run(send_async_message(owner_tid, f"✅ Canal vinculado como broadcaster: Twitch ID {broadcaster_id}. Ahora ejecuta /setgroup dentro del grupo objetivo."))
         return redirect("https://twitch.tv/")
     except Exception as e:
         logging.exception("Error in /twitch/setup/callback: %s", e)
@@ -474,10 +484,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     url = build_oauth_url_user(state)
     msg = (
-    f"Bienvenido al bot de subs Telegram–Twitch\n"
-    f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click '<a href=\"{url}\">aquí</a>' y sabrás si puedes acceder al grupo de suscriptores."
+        f"Bienvenido al bot de subs Telegram–Twitch
+"
+        f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click '<a href=\"{url}\">aquí</a>'."
     )
-    await update.effective_chat.send_message(msg, parse_mode="HTML",disable_web_page_preview=False)
+    await update.effective_chat.send_message(
+        msg,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
@@ -490,10 +505,10 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     url = build_oauth_url_setup(state)
     await update.effective_chat.send_message(
-        f"Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.\n"
-        f"Debes entrar con la cuenta del canal y aceptar el permiso <code>channel:read:subscriptions</code> haciendo click <a href=\"{url}\">aquí</a>.",
-        parse_mode="HTML",
-        disable_web_page_preview=True,
+        "Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.\n"
+        "Debes entrar con la cuenta del canal y aceptar el permiso `channel:read:subscriptions`.\n\n"
+        f"➡️ {url}",
+        disable_web_page_preview=False,
     )
 
 async def setgroup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
