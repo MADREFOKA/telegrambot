@@ -646,7 +646,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message(
         msg,
         parse_mode="HTML",
-        disable_web_page_preview=True,
+        disable_web_page_preview=False,
     )
 
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -671,7 +671,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones."
         f"Debes entrar con la cuenta del canal y aceptar el permiso <code>channel:read:subscriptions</code> haciendo click <a href=\"{safe_url}\">aquí</a>.",
         parse_mode="HTML",
-        disable_web_page_preview=True,
+        disable_web_page_preview=False,
     )
 
 async def setgroup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
