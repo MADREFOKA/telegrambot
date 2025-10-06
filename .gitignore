@@ -1,0 +1,8 @@
+# Entorno virtual
+.venv/
+__pycache__/
+
+# Archivos locales
+.env
+*.db
+*.sqlite
