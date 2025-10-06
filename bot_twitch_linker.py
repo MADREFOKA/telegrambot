@@ -641,8 +641,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = build_oauth_url_user(state)
     safe_url = escape(url, quote=True)
     msg = (
-        "Bienvenido al bot de subs Telegram–Twitch
-"
+        f"Bienvenido al bot de subs Telegram–Twitch"
         f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click '<a href=\"{safe_url}\">aquí</a>' y sabrás si puedes acceder al grupo de suscriptores."
     )
     await update.effective_chat.send_message(
