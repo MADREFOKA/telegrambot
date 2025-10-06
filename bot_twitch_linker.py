@@ -653,7 +653,20 @@ def main():
     from zoneinfo import ZoneInfo
     from datetime import time as dtime
     tz = ZoneInfo(TZ)
-    application.job_queue.run_daily(weekly_audit_job, time=dtime(hour=5, minute=0, second=0), days=(0,), name="weekly_audit", timezone=tz)
+    # Configure JobQueue timezone if supported (PTB v21 removed the 'timezone' kw in run_daily)
+    try:
+        application.job_queue.scheduler.configure(timezone=tz)
+    except Exception:
+        try:
+            application.job_queue.timezone = tz  # fallback for other PTB versions
+        except Exception:
+            pass
+    application.job_queue.run_daily(
+        weekly_audit_job,
+        time=dtime(hour=5, minute=0, second=0),
+        days=(0,),
+        name="weekly_audit",
+    )
 
     # Start Flask in background thread (waitress binds to Render's PORT)
     import threading
