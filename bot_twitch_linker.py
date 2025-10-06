@@ -610,7 +610,8 @@ async def weekly_audit_job(context: ContextTypes.DEFAULT_TYPE):
 
 def run_flask():
     from werkzeug.serving import make_server
-    server = make_server("0.0.0.0", 8080, flask_app)
+    port = int(os.getenv("PORT", "8080"))  # Render asigna PORT dinámico
+    server = make_server("0.0.0.0", port, flask_app)
     server.serve_forever()
 
 async def main():
