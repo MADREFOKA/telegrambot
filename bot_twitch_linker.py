@@ -669,8 +669,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = build_oauth_url_setup(state)
     safe_url = escape(url, quote=True)
     await update.effective_chat.send_message(
-        "Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.
-"
+        f"Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones."
         f"Debes entrar con la cuenta del canal y aceptar el permiso <code>channel:read:subscriptions</code> haciendo click <a href=\"{safe_url}\">aquí</a>.",
         parse_mode="HTML",
         disable_web_page_preview=True,
