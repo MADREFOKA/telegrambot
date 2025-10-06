@@ -59,12 +59,15 @@ from telegram import (
     ChatInviteLink,
 )
 from telegram.constants import ChatMemberStatus
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     ApplicationBuilder,
     CommandHandler,
     ChatMemberHandler,
     ContextTypes,
+    MessageHandler,
+    filters
 )
 
 # ---------------------------
@@ -166,6 +169,15 @@ CREATE TABLE IF NOT EXISTS group_members (
   left_at INTEGER,
   PRIMARY KEY (group_id, telegram_id)
 );
+
+CREATE TABLE IF NOT EXISTS privileged (
+  group_id INTEGER NOT NULL,
+  telegram_id INTEGER NOT NULL,
+  added_by INTEGER,
+  note TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (group_id, telegram_id)
+);
 """
 
 # PG DDL (use BIGINT for Telegram IDs & group IDs)
@@ -216,6 +228,15 @@ CREATE TABLE IF NOT EXISTS group_members (
   telegram_id BIGINT NOT NULL,
   joined_at INTEGER,
   left_at INTEGER,
+  PRIMARY KEY (group_id, telegram_id)
+);
+
+CREATE TABLE IF NOT EXISTS privileged (
+  group_id BIGINT NOT NULL,
+  telegram_id BIGINT NOT NULL,
+  added_by BIGINT,
+  note TEXT,
+  created_at INTEGER NOT NULL,
   PRIMARY KEY (group_id, telegram_id)
 );
 """
@@ -308,6 +329,13 @@ async def db_fetchall(query: str, *params):
             await cur.close()
             return rows
 
+async def is_privileged(group_id: int, user_id: int) -> bool:
+    row = await db_fetchone(
+        "SELECT 1 FROM privileged WHERE group_id=? AND telegram_id=? LIMIT 1",
+        group_id, user_id
+    )
+    return bool(row)
+    
 # ---------------------------
 # Utilities
 # ---------------------------
@@ -738,6 +766,231 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif status in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED):
         await db_execute("UPDATE group_members SET left_at=? WHERE group_id=? AND telegram_id=?", int(time.time()), chat.id, user.id)
 
+async def auditfull_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if not chat or chat.type not in ("group", "supergroup"):
+        await update.effective_message.reply_text("Ejecuta /auditfull dentro del grupo objetivo.")
+        return
+
+    # Busca la config del broadcaster para ESTE grupo
+    b = await db_fetchone("SELECT * FROM broadcasters WHERE group_id=? LIMIT 1", chat.id)
+    if not b:
+        await update.effective_message.reply_text("Este grupo no está vinculado. Usa /setgroup primero.")
+        return
+
+    # Candidatos: vistos en grupo, usuarios que iniciaron el bot, y los que tienen link hecho
+    candidates: set[int] = set()
+    rows = await db_fetchall("SELECT telegram_id FROM group_members WHERE group_id=? AND left_at IS NULL", chat.id)
+    for r in rows: candidates.add(int(r["telegram_id"]))
+    rows = await db_fetchall("SELECT telegram_id FROM telegram_users")  # gente que hizo /start
+    for r in rows: candidates.add(int(r["telegram_id"]))
+    rows = await db_fetchall("SELECT telegram_id FROM links")  # cualquiera con link
+    for r in rows: candidates.add(int(r["telegram_id"]))
+
+    # Filtra los que REALMENTE están ahora en el grupo (via Bot API)
+    present: list[int] = []
+    for uid in candidates:
+        try:
+            cm = await context.bot.get_chat_member(chat.id, uid)
+            if cm.status in (
+                ChatMemberStatus.MEMBER,
+                ChatMemberStatus.RESTRICTED,
+                ChatMemberStatus.ADMINISTRATOR,
+                ChatMemberStatus.OWNER,
+            ):
+                present.append(uid)
+        except BadRequest:
+            # user not found o nunca estuvo
+            continue
+
+    kicked = 0
+    access, broadcaster_id = await ensure_valid_broadcaster_token(b)
+
+    for uid in present:
+        # No intentes expulsar admins/owner
+        try:
+            cm = await context.bot.get_chat_member(chat.id, uid)
+            if cm.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+                continue
+        except BadRequest:
+            continue
+
+        row = await db_fetchone("SELECT linked_twitch_id FROM telegram_users WHERE telegram_id=?", uid)
+        tw_id = row["linked_twitch_id"] if row else None
+
+        try:
+            if not tw_id:
+                # No vinculó Twitch -> fuera
+                await context.bot.ban_chat_member(chat_id=chat.id, user_id=uid, until_date=int(time.time()) + 35)
+                await context.bot.unban_chat_member(chat_id=chat.id, user_id=uid, only_if_banned=True)
+                await db_execute("UPDATE group_members SET left_at=? WHERE group_id=? AND telegram_id=?",
+                                 int(time.time()), chat.id, uid)
+                kicked += 1
+                continue
+
+            # Vinculado: comprueba suscripción
+            try:
+                ok = await twitch_check_subscription(access, broadcaster_id, tw_id)
+            except PermissionError:
+                # refresca y reintenta una vez
+                b2 = await db_fetchone("SELECT * FROM broadcasters WHERE broadcaster_id=?", b["broadcaster_id"])
+                access, broadcaster_id = await ensure_valid_broadcaster_token(b2)
+                ok = await twitch_check_subscription(access, broadcaster_id, tw_id)
+
+            if not ok:
+                await context.bot.ban_chat_member(chat_id=chat.id, user_id=uid, until_date=int(time.time()) + 35)
+                await context.bot.unban_chat_member(chat_id=chat.id, user_id=uid, only_if_banned=True)
+                await db_execute("UPDATE group_members SET left_at=? WHERE group_id=? AND telegram_id=?",
+                                 int(time.time()), chat.id, uid)
+                kicked += 1
+        except Exception as e:
+            logging.warning("auditfull: no pude procesar %s: %s", uid, e)
+            continue
+
+    await update.effective_message.reply_text(f"🧹 Limpieza completa. Expulsados: {kicked}")
+
+async def privilege_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type not in ("group", "supergroup"):
+        await update.effective_message.reply_text("Ejecuta /privilege dentro del grupo.")
+        return
+
+    # Solo admins/owner pueden usarlo
+    try:
+        me = await context.bot.get_chat_member(chat.id, user.id)
+        if me.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+            await update.effective_message.reply_text("Solo administradores pueden usar este comando.")
+            return
+    except BadRequest:
+        await update.effective_message.reply_text("No pude verificar tus permisos.")
+        return
+
+    # Resolver objetivo: reply > id numérico > @username > 'me/yo'
+    target_id: Optional[int] = None
+    note = ""
+    if update.effective_message.reply_to_message:
+        target_id = update.effective_message.reply_to_message.from_user.id
+        note = " ".join(context.args) if context.args else ""
+    elif context.args:
+        arg0 = context.args[0]
+        rest = context.args[1:]
+        note = " ".join(rest) if rest else ""
+        if arg0.lower() in ("me", "yo"):
+            target_id = user.id
+        elif arg0.isdigit():
+            target_id = int(arg0)
+        else:
+            username = arg0.lstrip("@")
+            row = await db_fetchone(
+                "SELECT telegram_id FROM telegram_users WHERE LOWER(username)=LOWER(?) LIMIT 1",
+                username
+            )
+            if row:
+                target_id = int(row["telegram_id"])
+
+    if not target_id:
+        await update.effective_message.reply_text(
+            "Uso: responde a un mensaje con /privilege [nota]\n"
+            "o /privilege <user_id|@username|me> [nota]"
+        )
+        return
+
+    # Insert/Upsert
+    ts = int(time.time())
+    if USE_PG:
+        await db_execute(
+            "INSERT INTO privileged(group_id, telegram_id, added_by, note, created_at) "
+            "VALUES (?,?,?,?,?) "
+            "ON CONFLICT (group_id, telegram_id) DO UPDATE SET "
+            "added_by=EXCLUDED.added_by, note=EXCLUDED.note, created_at=EXCLUDED.created_at",
+            chat.id, target_id, user.id, note, ts
+        )
+    else:
+        await db_execute(
+            "INSERT OR REPLACE INTO privileged(group_id, telegram_id, added_by, note, created_at) "
+            "VALUES (?,?,?,?,?)",
+            chat.id, target_id, user.id, note, ts
+        )
+
+    await update.effective_message.reply_text(f"✅ Usuario {target_id} marcado como privilegiado en este grupo.")
+
+async def unprivilege_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type not in ("group", "supergroup"):
+        await update.effective_message.reply_text("Ejecuta /unprivilege dentro del grupo.")
+        return
+
+    try:
+        me = await context.bot.get_chat_member(chat.id, user.id)
+        if me.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+            await update.effective_message.reply_text("Solo administradores pueden usar este comando.")
+            return
+    except BadRequest:
+        await update.effective_message.reply_text("No pude verificar tus permisos.")
+        return
+
+    target_id: Optional[int] = None
+    if update.effective_message.reply_to_message:
+        target_id = update.effective_message.reply_to_message.from_user.id
+    elif context.args:
+        arg0 = context.args[0]
+        if arg0.lower() in ("me", "yo"):
+            target_id = user.id
+        elif arg0.isdigit():
+            target_id = int(arg0)
+        else:
+            username = arg0.lstrip("@")
+            row = await db_fetchone(
+                "SELECT telegram_id FROM telegram_users WHERE LOWER(username)=LOWER(?) LIMIT 1",
+                username
+            )
+            if row:
+                target_id = int(row["telegram_id"])
+
+    if not target_id:
+        await update.effective_message.reply_text(
+            "Uso: responde a un mensaje con /unprivilege\n"
+            "o /unprivilege <user_id|@username|me>"
+        )
+        return
+
+    await db_execute(
+        "DELETE FROM privileged WHERE group_id=? AND telegram_id=?",
+        chat.id, target_id
+    )
+    await update.effective_message.reply_text(f"✅ Usuario {target_id} eliminado de privilegiados en este grupo.")
+
+async def listprivileged_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if not chat or chat.type not in ("group", "supergroup"):
+        await update.effective_message.reply_text("Ejecuta /listprivileged dentro del grupo.")
+        return
+
+    rows = await db_fetchall(
+        "SELECT telegram_id, note, created_at FROM privileged WHERE group_id=? ORDER BY created_at DESC",
+        chat.id
+    )
+    if not rows:
+        await update.effective_message.reply_text("No hay usuarios privilegiados en este grupo.")
+        return
+
+    lines = []
+    for r in rows:
+        uid = r["telegram_id"]
+        note = r.get("note") if isinstance(r, dict) else r["note"]
+        try:
+            cm = await context.bot.get_chat_member(chat.id, uid)
+            name = cm.user.full_name
+        except Exception:
+            name = str(uid)
+        if note:
+            lines.append(f"• {name} ({uid}) — {note}")
+        else:
+            lines.append(f"• {name} ({uid})")
+    txt = "👑 Privilegiados:\n" + "\n".join(lines[:60])  # evita mensajes gigantes
+    await update.effective_message.reply_text(txt)
 
 # ---------------------------
 # Weekly audit job
@@ -754,7 +1007,7 @@ async def audit_group_and_kick(context: ContextTypes.DEFAULT_TYPE, b_row) -> int
         "WHERE gm.group_id=? AND gm.left_at IS NULL",
         group_id,
     )
-
+    
     if not rows:
         return 0
 
@@ -765,6 +1018,10 @@ async def audit_group_and_kick(context: ContextTypes.DEFAULT_TYPE, b_row) -> int
     for r in rows:
         tg_id = r["telegram_id"]
         tw_id = r["linked_twitch_id"]
+        
+        if await is_privileged(chat.id, uid):
+            continue
+
         try:
             # If NOT linked => kick directly
             if not tw_id:
@@ -849,8 +1106,12 @@ def main():
     application.add_handler(CommandHandler("checkme", checkme_cmd))
     application.add_handler(CommandHandler("auditnow", auditnow_cmd))
     application.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
+    application.add_handler(CommandHandler("auditfull", auditfull_cmd))
+    application.add_handler(CommandHandler("privilege", privilege_cmd))
+    application.add_handler(CommandHandler("unprivilege", unprivilege_cmd))
+    application.add_handler(CommandHandler("listprivileged", listprivileged_cmd))
 
-    # Jobs: weekly Monday 05:00 Europe/Madrid (PTB v21: config tz on scheduler)
+    # Jobs: Semanalmente cada Lunes a las 05am
     from zoneinfo import ZoneInfo
     from datetime import time as dtime
     tz = ZoneInfo(TZ)
