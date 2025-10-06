@@ -380,7 +380,8 @@ def twitch_callback_setup():
             "VALUES (?,?,?,?,?,?, COALESCE((SELECT group_id FROM broadcasters WHERE broadcaster_id=?), NULL), COALESCE((SELECT invite_link FROM broadcasters WHERE broadcaster_id=?), NULL))",
             broadcaster_id, owner_tid, access_token, refresh_token or "", int(time.time()), int(expires_in), broadcaster_id, broadcaster_id
         ))
-        asyncio.run(send_async_message(owner_tid, f"✅ Canal vinculado como broadcaster. /n Ahora ejecuta /setgroup dentro del grupo objetivo."))
+        asyncio.run(send_async_message(owner_tid,
+                    "✅ Canal vinculado como broadcaster.\n\nAhora ejecuta /setgroup dentro del grupo objetivo."))
         return redirect("https://twitch.tv/")
     except Exception as e:
         logging.exception("Error in /twitch/setup/callback: %s", e)
