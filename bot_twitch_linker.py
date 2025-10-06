@@ -103,8 +103,6 @@ flask_app.secret_key = FLASK_SECRET
 # PTB app refs (set on startup)
 ptb_app: Application | None = None
 ptb_loop: asyncio.AbstractEventLoop | None = None
-pg_pool: asyncpg.Pool | None = None
-
 
 # Capture PTB loop on startup so Flask thread can schedule tasks safely
 async def _on_startup(app: Application) -> None:
@@ -447,7 +445,7 @@ def twitch_callback_user():
         # Store
         if USE_PG:
             asyncio.run(db_execute(
-                "INSERT INTO twitch_users(twitch_id, login, display_name, email) VALUES ($1,$2,$3,$4) "
+                "INSERT INTO twitch_users(twitch_id, login, display_name, email) VALUES (?,?,?,?) "
                 "ON CONFLICT (twitch_id) DO UPDATE SET login=EXCLUDED.login, display_name=EXCLUDED.display_name, email=EXCLUDED.email",
                 twitch_id, login, display_name, email,
             ))
@@ -462,7 +460,7 @@ def twitch_callback_user():
         ))
         if USE_PG:
             asyncio.run(db_execute(
-                "INSERT INTO links(telegram_id, twitch_id, broadcaster_id, created_at) VALUES ($1,$2,NULL,$3) "
+                "INSERT INTO links(telegram_id, twitch_id, broadcaster_id, created_at) VALUES (?,?,NULL,?) "
                 "ON CONFLICT (telegram_id, twitch_id) DO UPDATE SET broadcaster_id=EXCLUDED.broadcaster_id, created_at=EXCLUDED.created_at",
                 telegram_id, twitch_id, int(time.time()),
             ))
@@ -516,7 +514,7 @@ def twitch_callback_setup():
         if USE_PG:
             asyncio.run(db_execute(
                 "INSERT INTO broadcasters(broadcaster_id, owner_telegram_id, access_token, refresh_token, token_obtained_at, token_expires_in, group_id, invite_link) "
-                "VALUES ($1,$2,$3,$4,$5,$6,NULL,NULL) "
+                "VALUES (?,?,?,?,?,?,NULL,NULL) "
                 "ON CONFLICT (broadcaster_id) DO UPDATE SET "
                 "owner_telegram_id=EXCLUDED.owner_telegram_id, "
                 "access_token=EXCLUDED.access_token, "
@@ -612,7 +610,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # upsert telegram user
     if USE_PG:
         await db_execute(
-            "INSERT INTO telegram_users(telegram_id, username, first_name, last_name) VALUES ($1,$2,$3,$4) ON CONFLICT (telegram_id) DO NOTHING",
+            "INSERT INTO telegram_users(telegram_id, username, first_name, last_name) VALUES (?,?,?,?) "
+            "ON CONFLICT (telegram_id) DO NOTHING",
             u.id, u.username or "", u.first_name or "", u.last_name or "",
         )
     else:
@@ -628,7 +627,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = gen_state()
     if USE_PG:
         await db_execute(
-            "INSERT INTO oauth_states(state, telegram_id, purpose, created_at) VALUES ($1,$2,$3,$4) "
+            "INSERT INTO oauth_states(state, telegram_id, purpose, created_at) VALUES (?,?,?,?) "
             "ON CONFLICT (state) DO UPDATE SET telegram_id=EXCLUDED.telegram_id, purpose=EXCLUDED.purpose, created_at=EXCLUDED.created_at",
             state, u.id, "user_link", int(time.time())
         )
@@ -657,7 +656,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = gen_state()
     if USE_PG:
         await db_execute(
-            "INSERT INTO oauth_states(state, telegram_id, purpose, created_at) VALUES ($1,$2,$3,$4) "
+            "INSERT INTO oauth_states(state, telegram_id, purpose, created_at) VALUES (?,?,?,?) "
             "ON CONFLICT (state) DO UPDATE SET telegram_id=EXCLUDED.telegram_id, purpose=EXCLUDED.purpose, created_at=EXCLUDED.created_at",
             state, u.id, "broadcaster_setup", int(time.time())
         )
@@ -728,7 +727,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if status in (ChatMemberStatus.MEMBER, ChatMemberStatus.RESTRICTED):
         if USE_PG:
             await db_execute(
-                "INSERT INTO group_members(group_id, telegram_id, joined_at, left_at) VALUES ($1,$2,$3,NULL) "
+                "INSERT INTO group_members(group_id, telegram_id, joined_at, left_at) VALUES (?,?,?,NULL) "
                 "ON CONFLICT (group_id, telegram_id) DO UPDATE SET joined_at=EXCLUDED.joined_at, left_at=NULL",
                 chat.id, user.id, int(time.time())
             )
