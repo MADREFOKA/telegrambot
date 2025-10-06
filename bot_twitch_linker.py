@@ -350,7 +350,7 @@ def twitch_callback_user():
         ))
         # Ack to user via bot
         asyncio.run(send_async_message(telegram_id, 
-                                       f"✅ Vinculación completada: **{display_name or login}** ↔️ Telegram." 
+                                       f"✅ Vinculación completada: {display_name or login}.\n" 
                                        f"Ahora comprobaré tu suscripción…"))
         # Find broadcaster config (simple use-case: last one)
         b = asyncio.run(db_fetchone("SELECT * FROM broadcasters ORDER BY rowid DESC LIMIT 1"))
