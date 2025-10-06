@@ -332,7 +332,7 @@ def twitch_callback_user():
 
         b = asyncio.run(db_fetchone("SELECT * FROM broadcasters ORDER BY rowid DESC LIMIT 1"))
         if not b:
-            asyncio.run(send_async_message(telegram_id, "Aún no hay ningún canal de Twitch configurado. Pide al dueño que ejecute /setup."))
+            asyncio.run(send_async_message(telegram_id, "Aún no hay ningún canal de Twitch configurado. Pide al dueño que ejecute la configuración."))
             return redirect("https://twitch.tv/")
         # Check subscription asynchronously on PTB loop
         if ptb_loop is not None:
