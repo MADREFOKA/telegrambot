@@ -48,7 +48,8 @@ from typing import Optional, Tuple
 
 import aiohttp
 import aiosqlite
-import asyncpg
+import psycopg
+from psycopg.rows import dict_row
 from flask import Flask, request, redirect, make_response
 from dotenv import load_dotenv
 import os
@@ -78,7 +79,7 @@ OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET")
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 TZ = os.getenv("TZ", "Europe/Madrid")
 DB_PATH = os.getenv("DB_PATH", "twitch_gate.db")
-DATABASE_URL = os.getenv("DATABASE_URL")  # Si existe, usamos Postgres
+DATABASE_URL = os.getenv("DATABASE_URL")
 USE_PG = bool(DATABASE_URL)
 
 if not TELEGRAM_BOT_TOKEN:
@@ -233,30 +234,41 @@ async def db_init():
             await db.executescript(CREATE_SQL)
             await db.commit()
 
-# Convert '?' placeholders to $1, $2, ... for asyncpg
-_def_qmark_to_pg_cache: dict[tuple[str, int], str] = {}
+DATABASE_URL = os.getenv("DATABASE_URL")
+USE_PG = bool(DATABASE_URL)
 
-def _qmark_to_pg(query: str, n_params: int) -> str:
-    key = (query, n_params)
-    if key in _def_qmark_to_pg_cache:
-        return _def_qmark_to_pg_cache[key]
+# Conversor de '?' → '%s' para psycopg
+def _qmark_to_psycopg(query: str, n_params: int) -> str:
     out = []
-    idx = 0
+    i = 0
     for ch in query:
-        if ch == '?' and idx < n_params:
-            out.append(f"${idx+1}")
-            idx += 1
+        if ch == '?' and i < n_params:
+            out.append('%s')
+            i += 1
         else:
             out.append(ch)
-    conv = ''.join(out)
-    _def_qmark_to_pg_cache[key] = conv
-    return conv
+    return ''.join(out)
+
+async def db_init():
+    if USE_PG:
+        # Ejecuta el DDL en Postgres
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as con:
+            async with con.cursor() as cur:
+                for stmt in [s.strip() for s in CREATE_SQL_PG.split(';') if s.strip()]:
+                    await cur.execute(stmt)
+            await con.commit()
+    else:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.executescript(CREATE_SQL)
+            await db.commit()
 
 async def db_execute(query: str, *params):
     if USE_PG:
-        async with pg_pool.acquire() as con:
-            q = _qmark_to_pg(query, len(params))
-            await con.execute(q, *params)
+        q = _qmark_to_psycopg(query, len(params))
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as con:
+            async with con.cursor() as cur:
+                await cur.execute(q, params)
+            await con.commit()
     else:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(query, params)
@@ -264,10 +276,14 @@ async def db_execute(query: str, *params):
 
 async def db_fetchone(query: str, *params):
     if USE_PG:
-        async with pg_pool.acquire() as con:
-            q = _qmark_to_pg(query, len(params))
-            row = await con.fetchrow(q, *params)
-            return dict(row) if row else None
+        q = _qmark_to_psycopg(query, len(params))
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as con:
+            con.row_factory = dict_row
+            async with con.cursor() as cur:
+                await cur.execute(q, params)
+                row = await cur.fetchone()
+            await con.commit()
+            return row
     else:
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
@@ -278,10 +294,14 @@ async def db_fetchone(query: str, *params):
 
 async def db_fetchall(query: str, *params):
     if USE_PG:
-        async with pg_pool.acquire() as con:
-            q = _qmark_to_pg(query, len(params))
-            rows = await con.fetch(q, *params)
-            return [dict(r) for r in rows]
+        q = _qmark_to_psycopg(query, len(params))
+        async with await psycopg.AsyncConnection.connect(DATABASE_URL) as con:
+            con.row_factory = dict_row
+            async with con.cursor() as cur:
+                await cur.execute(q, params)
+                rows = await cur.fetchall()
+            await con.commit()
+            return rows
     else:
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
@@ -289,7 +309,6 @@ async def db_fetchall(query: str, *params):
             rows = await cur.fetchall()
             await cur.close()
             return rows
-
 
 # ---------------------------
 # Utilities
