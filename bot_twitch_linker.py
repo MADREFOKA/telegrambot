@@ -70,11 +70,8 @@ from telegram.constants import ChatMemberStatus
 from telegram.ext import (
     Application,
     ApplicationBuilder,
-    AIORateLimiter,
     CommandHandler,
-    MessageHandler,
     ChatMemberHandler,
-    filters,
     ContextTypes,
 )
 
@@ -114,6 +111,13 @@ flask_app.secret_key = FLASK_SECRET
 # PTB Application (initialized later)
 ptb_app: Application | None = None
 ptb_loop: asyncio.AbstractEventLoop | None = None
+
+# Capture PTB loop on startup so we can safely schedule bot calls from Flask thread
+async def _on_startup(app: Application) -> None:
+    global ptb_app, ptb_loop
+    ptb_app = app
+    ptb_loop = asyncio.get_running_loop()
+    logging.info("PTB event loop capturado y listo.")
 
 # ---------------------------
 # Data & DB Helpers
@@ -352,7 +356,7 @@ def twitch_callback_user():
             asyncio.run(send_async_message(telegram_id, "Aún no hay ningún canal de Twitch configurado. Pide al dueño que ejecute /setup."))
             return redirect("https://twitch.tv/")
         # Check subscription
-        asyncio.run(check_and_notify_subscription(telegram_id, twitch_id, b))
+        asyncio.run_coroutine_threadsafe(check_and_notify_subscription(telegram_id, twitch_id, b), ptb
         return redirect("https://twitch.tv/")
     except Exception as e:
         logging.exception("Error in /twitch/callback: %s", e)
@@ -412,7 +416,7 @@ async def ensure_valid_broadcaster_token(b_row) -> Tuple[str, str]:
     )
     return access, b_row["broadcaster_id"]
 
-async def create_or_get_invite_link(context: ContextTypes.DEFAULT_TYPE, b_row) -> Optional[str]:
+async def create_or_get_invite_link(b_row) -> Optional[str]:
     group_id = b_row["group_id"]
     if not group_id:
         return None
@@ -420,7 +424,7 @@ async def create_or_get_invite_link(context: ContextTypes.DEFAULT_TYPE, b_row) -
     if b_row["invite_link"]:
         return b_row["invite_link"]
     try:
-        link: ChatInviteLink = await context.bot.create_chat_invite_link(chat_id=group_id, creates_join_request=False)
+        link: ChatInviteLink = await ptb_app.bot.create_chat_invite_link(chat_id=group_id, creates_join_request=False)
         await db_execute("UPDATE broadcasters SET invite_link=? WHERE broadcaster_id=?", link.invite_link, b_row["broadcaster_id"])
         return link.invite_link
     except Exception as e:
@@ -444,7 +448,7 @@ async def check_and_notify_subscription(telegram_id: int, twitch_user_id: str, b
 
     if is_sub:
         # get invite link
-        link = await create_or_get_invite_link(ptb_app.application_context, b_row)
+        link = await create_or_get_invite_link(b_row)
         if link:
             await ptb_app.bot.send_message(chat_id=telegram_id, text=f"🎉 ¡Estás suscrito! Únete al grupo aquí: {link}")
         else:
@@ -619,57 +623,45 @@ def run_flask():
     logging.info(f"Starting Flask with waitress on port {port}…")
     serve(flask_app, host="0.0.0.0", port=port)
 
-async def main():
-    global ptb_app, ptb_loop
+def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-    await db_init()
 
-    ptb_app = (
+    # Initialize DB synchronously before PTB
+    asyncio.run(db_init())
+
+    application = (
         ApplicationBuilder()
         .token(TELEGRAM_BOT_TOKEN)
-        .rate_limiter(AIORateLimiter())
+        .post_init(_on_startup)
         .concurrent_updates(True)
         .build()
     )
-    ptb_loop = asyncio.get_running_loop()
 
     # Handlers
-    ptb_app.add_handler(CommandHandler("start", start))
-    ptb_app.add_handler(CommandHandler("setup", setup_cmd))
-    ptb_app.add_handler(CommandHandler("setgroup", setgroup_cmd))
-    ptb_app.add_handler(CommandHandler("checkme", checkme_cmd))
-    ptb_app.add_handler(CommandHandler("auditnow", auditnow_cmd))
-    ptb_app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("setup", setup_cmd))
+    application.add_handler(CommandHandler("setgroup", setgroup_cmd))
+    application.add_handler(CommandHandler("checkme", checkme_cmd))
+    application.add_handler(CommandHandler("auditnow", auditnow_cmd))
+    application.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
 
     # Jobs: weekly Monday 05:00 Europe/Madrid
     from zoneinfo import ZoneInfo
+    from datetime import time as dtime
     tz = ZoneInfo(TZ)
-    run_time = datetime.now(tz=tz).replace(hour=5, minute=0, second=0, microsecond=0)
-    if run_time < datetime.now(tz=tz):
-        run_time += timedelta(days=1)
-    # daily placement at 05:00, but restrict to Monday inside the job (simple approach)
-    ptb_app.job_queue.run_daily(weekly_audit_job, time=run_time.timetz(), days=(0,), name="weekly_audit", timezone=tz)
+    application.job_queue.run_daily(weekly_audit_job, time=dtime(hour=5, minute=0, second=0), days=(0,), name="weekly_audit", timezone=tz)
 
-    # Start Flask in background thread
+    # Start Flask in background thread (waitress binds to Render's PORT)
     import threading
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
 
-    logging.info("Bot and Flask server running. OAuth redirect: %s/twitch/callback", BASE_URL)
+    logging.info("Starting Application.run_polling()… OAuth redirect base: %s", BASE_URL)
+    application.run_polling(close_loop=False)
 
-    await ptb_app.initialize()
-    await ptb_app.start()
-    try:
-        await ptb_app.updater.start_polling()
-        # Keep running until Ctrl+C
-        await asyncio.Event().wait()
-    finally:
-        await ptb_app.updater.stop()
-        await ptb_app.stop()
-        await ptb_app.shutdown()
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         print("Bye!")
