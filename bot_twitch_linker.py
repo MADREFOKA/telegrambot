@@ -350,13 +350,17 @@ def twitch_callback_user():
         ))
         # Ack to user via bot
         asyncio.run(send_async_message(telegram_id, f"✅ Vinculación completada: Twitch **{display_name or login}** ↔️ Telegram. Ahora comprobaré tu suscripción…"))
-        # Find any broadcaster configured by this owner (simple use-case: 1 row)
+        # Find broadcaster config (simple use-case: last one)
         b = asyncio.run(db_fetchone("SELECT * FROM broadcasters ORDER BY rowid DESC LIMIT 1"))
         if not b:
             asyncio.run(send_async_message(telegram_id, "Aún no hay ningún canal de Twitch configurado. Pide al dueño que ejecute /setup."))
             return redirect("https://twitch.tv/")
-        # Check subscription
-        asyncio.run_coroutine_threadsafe(check_and_notify_subscription(telegram_id, twitch_id, b), ptb
+        # Check subscription asynchronously on PTB loop
+        if ptb_loop is not None:
+            asyncio.run_coroutine_threadsafe(
+                check_and_notify_subscription(telegram_id, twitch_id, b),
+                ptb_loop,
+            )
         return redirect("https://twitch.tv/")
     except Exception as e:
         logging.exception("Error in /twitch/callback: %s", e)
@@ -665,3 +669,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("Bye!")
+
