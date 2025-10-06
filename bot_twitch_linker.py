@@ -300,6 +300,10 @@ def build_oauth_url_setup(state: str) -> str:
 # Flask Routes (OAuth callbacks)
 # ---------------------------
 
+@flask_app.get("/")
+def root():
+    return {"ok": True, "service": "telegram-twitch-bot"}
+
 @flask_app.get("/healthz")
 def healthz():
     return {"ok": True}
@@ -609,10 +613,11 @@ async def weekly_audit_job(context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------
 
 def run_flask():
-    from werkzeug.serving import make_server
-    port = int(os.getenv("PORT", "8080"))  # Render asigna PORT dinámico
-    server = make_server("0.0.0.0", port, flask_app)
-    server.serve_forever()
+    # Use waitress (production WSGI server) and bind to Render's PORT
+    from waitress import serve
+    port = int(os.getenv("PORT", "8080"))
+    logging.info(f"Starting Flask with waitress on port {port}…")
+    serve(flask_app, host="0.0.0.0", port=port)
 
 async def main():
     global ptb_app, ptb_loop
