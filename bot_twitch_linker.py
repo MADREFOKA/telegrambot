@@ -338,7 +338,7 @@ def twitch_callback_user():
             telegram_id, twitch_id, int(time.time()),
         ))
         # Ack to user via bot
-        asyncio.run(send_async_message(telegram_id, f"✅ Vinculación completada: Twitch **{display_name or login}** ↔️ Telegram. Ahora comprobaré tu suscripción…"))
+        asyncio.run(send_async_message(telegram_id, f"✅ Vinculación completada. Ahora comprobaré tu suscripción…"))
         # Find broadcaster config (simple use-case: last one)
         b = asyncio.run(db_fetchone("SELECT * FROM broadcasters ORDER BY rowid DESC LIMIT 1"))
         if not b:
@@ -380,7 +380,7 @@ def twitch_callback_setup():
             "VALUES (?,?,?,?,?,?, COALESCE((SELECT group_id FROM broadcasters WHERE broadcaster_id=?), NULL), COALESCE((SELECT invite_link FROM broadcasters WHERE broadcaster_id=?), NULL))",
             broadcaster_id, owner_tid, access_token, refresh_token or "", int(time.time()), int(expires_in), broadcaster_id, broadcaster_id
         ))
-        asyncio.run(send_async_message(owner_tid, f"✅ Canal vinculado como broadcaster: Twitch ID {broadcaster_id}. Ahora ejecuta /setgroup dentro del grupo objetivo."))
+        asyncio.run(send_async_message(owner_tid, f"✅ Canal vinculado como broadcaster. /n Ahora ejecuta /setgroup dentro del grupo objetivo."))
         return redirect("https://twitch.tv/")
     except Exception as e:
         logging.exception("Error in /twitch/setup/callback: %s", e)
@@ -475,7 +475,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
     f"Bienvenido al bot de subs Telegram–Twitch\n"
     f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click '<a href=\"{url}\">aquí</a>'."
-)
+    )
     await update.effective_chat.send_message(msg, parse_mode="HTML",disable_web_page_preview=False)
 
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -489,9 +489,10 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     url = build_oauth_url_setup(state)
     await update.effective_chat.send_message(
-        "Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.\n"
-        "Debes entrar con la cuenta del canal y aceptar el permiso `channel:read:subscriptions` haciendo click <a href=\"{url}\">aquí</a>.",
-        disable_web_page_preview=False,
+        f"Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.\n"
+        f"Debes entrar con la cuenta del canal y aceptar el permiso <code>channel:read:subscriptions</code> haciendo click <a href=\"{url}\">aquí</a>.",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
     )
 
 async def setgroup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
