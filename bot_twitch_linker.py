@@ -630,8 +630,15 @@ def run_flask():
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-    # Initialize DB synchronously before PTB
-    asyncio.run(db_init())
+    # Ensure a default asyncio event loop exists (Python 3.13 on Render may not create one by default)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    # Initialize DB synchronously before PTB using the ensured event loop
+    loop.run_until_complete(db_init())
 
     application = (
         ApplicationBuilder()
