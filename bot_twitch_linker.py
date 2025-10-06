@@ -349,7 +349,9 @@ def twitch_callback_user():
             telegram_id, twitch_id, int(time.time()),
         ))
         # Ack to user via bot
-        asyncio.run(send_async_message(telegram_id, f"✅ Vinculación completada: Twitch **{display_name or login}** ↔️ Telegram. Ahora comprobaré tu suscripción…"))
+        asyncio.run(send_async_message(telegram_id, 
+                                       f"✅ Vinculación completada: **{display_name or login}** ↔️ Telegram." 
+                                       f"Ahora comprobaré tu suscripción…"))
         # Find broadcaster config (simple use-case: last one)
         b = asyncio.run(db_fetchone("SELECT * FROM broadcasters ORDER BY rowid DESC LIMIT 1"))
         if not b:
@@ -504,9 +506,9 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     url = build_oauth_url_setup(state)
     await update.effective_chat.send_message(
-        "Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.\n"
-        "Debes entrar con la cuenta del canal y aceptar el permiso `channel:read:subscriptions`.\n\n"
-        f"➡️ {url}",
+        f"Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.\n"
+        f"Debes entrar con la cuenta del canal y aceptar el permiso <code>channel:read:subscriptions</code> haciendo click <a href=\"{url}\">aquí</a>.",
+        parse_mode="HTML",
         disable_web_page_preview=False,
     )
 
