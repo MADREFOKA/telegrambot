@@ -486,14 +486,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     url = build_oauth_url_user(state)
     msg = (
-        f"Bienvenido al bot de subs Telegram–Twitch"
+        f"Bienvenido al bot de subs Telegram–Twitch\n"
         f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click '<a href=\"{url}\">aquí</a>'."
     )
-    await update.effective_chat.send_message(
-        msg,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
+    await update.effective_chat.send_message(msg,parse_mode="HTML", disable_web_page_preview=False)
 
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
