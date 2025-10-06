@@ -1,47 +1,25 @@
 """
-Telegram–Twitch Sub-Gate Bot
----------------------------------
+Telegram Twich Sub Checker
+-----------------------------------------------
 
-What it does
+¿Qué hace?
 ============
-- When a user opens the bot via link or /start, it DMs a Twitch OAuth login link to verify their Twitch account.
-- After login, the bot links their Telegram ID <-> Twitch ID in SQLite.
-- The bot checks if they are subscribed to the configured Twitch channel and, if so, sends them an invite link to a Telegram group. If not, it notifies them.
-- Weekly, the bot audits the group and kicks members who are no longer subscribed.
-- Supports multi-channel: a broadcaster (channel owner/mod) can run /setup to grant the bot the scope `channel:read:subscriptions` and bind a target Telegram group using /setgroup.
+- Cuando un usuario abre el bot a través de un enlace o /start, envía un mensaje directo con un enlace de inicio de sesión de Twitch OAuth para verificar su cuenta de Twitch.
+- Después de iniciar sesión, el bot vincula su ID de Telegram <-> ID de Twitch en SQLite.
+- El bot comprueba si están suscritos al canal de Twitch configurado y, si es así, les envía un enlace de invitación a un grupo de Telegram. Si no es así, se lo notifica.
+- Semanalmente, el bot audita el grupo y expulsa a los miembros que ya no están suscritos.
+- Admite múltiples canales: un difusor (propietario/moderador del canal) puede ejecutar /setup para conceder al bot el ámbito «channel:read:subscriptions» y vincular un grupo de Telegram de destino utilizando /setgroup.
 
-Tech stack
-==========
-- Python 3.10+
-- python-telegram-bot (v20+)
-- Flask (for OAuth callbacks)
-- aiohttp for Twitch API
-- APScheduler via PTB JobQueue
-- SQLite (file-based DB)
-
-Environment
-===========
-Create a `.env` with:
-
-TELEGRAM_BOT_TOKEN=123456:ABC...
-FLASK_SECRET=change_me
-OAUTH_CLIENT_ID=your_twitch_client_id
-OAUTH_CLIENT_SECRET=your_twitch_client_secret
-BASE_URL=https://your.public.domain (no trailing slash; used for OAuth redirect)
-# Optional: default timezone name for jobs
-TZ=Europe/Madrid
-
-Run
+Ejecutar
 ===
 $ pip install python-telegram-bot==20.8 aiohttp Flask python-dotenv aiosqlite
 $ python bot_twitch_linker.py
 
-Notes
+Notas
 =====
-- The bot must be an admin in the target group with rights to invite users and remove members.
-- For local dev, use a tunneler (e.g., ngrok) to expose Flask callback: set BASE_URL to your https ngrok URL.
-- Twitch App Settings: add redirect URL: {BASE_URL}/twitch/callback and {BASE_URL}/twitch/setup/callback
-- Telegram: enable privacy mode off if you want to capture chat_member updates in groups.
+- El bot debe ser administrador del grupo de destino y tener derechos para invitar a usuarios y eliminar miembros.
+- Configuración de la aplicación Twitch: añade la URL de redireccionamiento: {BASE_URL}/twitch/callback y {BASE_URL}/twitch/setup/callback
+- Telegram: desactiva el modo de privacidad si deseas capturar las actualizaciones de chat_member en los grupos.
 
 """
 from __future__ import annotations
@@ -75,9 +53,9 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ---------------------------
-# Config & Globals
-# ---------------------------
+# ----------------------------------
+# Configuración y variables globales
+# ----------------------------------
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -92,27 +70,26 @@ if not TELEGRAM_BOT_TOKEN:
 if not OAUTH_CLIENT_ID or not OAUTH_CLIENT_SECRET:
     raise SystemExit("Missing Twitch OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET in env")
 
-# Twitch OAuth endpoints
+# Twitch OAuth
 TW_OAUTH_AUTH = "https://id.twitch.tv/oauth2/authorize"
 TW_OAUTH_TOKEN = "https://id.twitch.tv/oauth2/token"
 TW_API = "https://api.twitch.tv/helix"
 
 # Scopes
-SCOPE_SETUP = ["channel:read:subscriptions"]  # for broadcaster channel setup
-SCOPE_USER = ["openid", "user:read:email"]   # for linking a viewer's identity
+SCOPE_SETUP = ["channel:read:subscriptions"]  # Para vincular el canal del streamer
+SCOPE_USER = ["openid", "user:read:email"]   # Para vincular el canal del viewer
 
-# SQLite file
+# SQLite
 DB_PATH = os.getenv("DB_PATH", "twitch_gate.db")
 
 # Flask app (OAuth callbacks)
 flask_app = Flask(__name__)
 flask_app.secret_key = FLASK_SECRET
 
-# PTB Application (initialized later)
+# PTB Application
 ptb_app: Application | None = None
 ptb_loop: asyncio.AbstractEventLoop | None = None
 
-# Capture PTB loop on startup so we can safely schedule bot calls from Flask thread
 async def _on_startup(app: Application) -> None:
     global ptb_app, ptb_loop
     ptb_app = app
@@ -120,7 +97,7 @@ async def _on_startup(app: Application) -> None:
     logging.info("PTB event loop capturado y listo.")
 
 # ---------------------------
-# Data & DB Helpers
+# Base de datos & DB Helpers
 # ---------------------------
 
 CREATE_SQL = r"""
@@ -223,9 +200,9 @@ async def send_async_message(chat_id: int, text: str):
     coro = ptb_app.bot.send_message(chat_id=chat_id, text=text, disable_web_page_preview=True)
     asyncio.run_coroutine_threadsafe(coro, ptb_loop)
 
-# ---------------------------
+# -----------------------
 # Twitch API helpers
-# ---------------------------
+# -----------------------
 
 async def twitch_token_exchange(code: str, redirect_path: str) -> dict:
     redirect_uri = f"{BASE_URL}{redirect_path}"
@@ -280,9 +257,9 @@ async def twitch_check_subscription(b_access_token: str, twitch_broadcaster_id: 
             js = await r.json()
             return len(js.get("data", [])) > 0
 
-# ---------------------------
+# ----------------------
 # OAuth URL builders
-# ---------------------------
+# ----------------------
 
 def build_oauth_url_user(state: str) -> str:
     redirect_uri = f"{BASE_URL}/twitch/callback"
@@ -300,9 +277,9 @@ def build_oauth_url_setup(state: str) -> str:
         f"&response_type=code&scope={scope}&state={state}"
     )
 
-# ---------------------------
+# ------------------------------
 # Flask Routes (OAuth callbacks)
-# ---------------------------
+# ------------------------------
 
 @flask_app.get("/")
 def root():
@@ -317,17 +294,17 @@ def twitch_callback_user():
     try:
         state = request.args.get("state")
         code = request.args.get("code")
+        
         if not state or not code:
             return make_response("Missing state/code", 400)
-        # Lookup state
         row = asyncio.run(db_fetchone("SELECT * FROM oauth_states WHERE state=?", state))
         if not row or row["purpose"] != "user_link":
             return make_response("Invalid state", 400)
         telegram_id = int(row["telegram_id"])
-        # Exchange code
+
         tokens = asyncio.run(twitch_token_exchange(code, "/twitch/callback"))
         access_token = tokens.get("access_token")
-        # Identify user
+
         me = asyncio.run(twitch_get_self(access_token))
         if not me:
             return make_response("Cannot identify Twitch user", 400)
@@ -335,7 +312,7 @@ def twitch_callback_user():
         login = me.get("login")
         display_name = me.get("display_name")
         email = me.get("email")
-        # Store
+
         asyncio.run(db_execute(
             "INSERT OR REPLACE INTO twitch_users(twitch_id, login, display_name, email) VALUES (?,?,?,?)",
             twitch_id, login, display_name, email,
@@ -348,11 +325,11 @@ def twitch_callback_user():
             "INSERT OR REPLACE INTO links(telegram_id, twitch_id, broadcaster_id, created_at) VALUES (?,?,NULL,?)",
             telegram_id, twitch_id, int(time.time()),
         ))
-        # Ack to user via bot
+
         asyncio.run(send_async_message(telegram_id, 
                                        f"✅ Vinculación completada: {display_name or login}.\n" 
                                        f"Ahora comprobaré tu suscripción…"))
-        # Find broadcaster config (simple use-case: last one)
+
         b = asyncio.run(db_fetchone("SELECT * FROM broadcasters ORDER BY rowid DESC LIMIT 1"))
         if not b:
             asyncio.run(send_async_message(telegram_id, "Aún no hay ningún canal de Twitch configurado. Pide al dueño que ejecute /setup."))
@@ -387,13 +364,13 @@ def twitch_callback_setup():
         if not me:
             return make_response("Cannot identify broadcaster", 400)
         broadcaster_id = me["id"]
-        # store broadcaster record
+
         asyncio.run(db_execute(
             "INSERT OR REPLACE INTO broadcasters(broadcaster_id, owner_telegram_id, access_token, refresh_token, token_obtained_at, token_expires_in, group_id, invite_link) "
             "VALUES (?,?,?,?,?,?, COALESCE((SELECT group_id FROM broadcasters WHERE broadcaster_id=?), NULL), COALESCE((SELECT invite_link FROM broadcasters WHERE broadcaster_id=?), NULL))",
             broadcaster_id, owner_tid, access_token, refresh_token or "", int(time.time()), int(expires_in), broadcaster_id, broadcaster_id
         ))
-        asyncio.run(send_async_message(owner_tid, f"✅ Canal vinculado como broadcaster: Twitch ID {broadcaster_id}. Ahora ejecuta /setgroup dentro del grupo objetivo."))
+        asyncio.run(send_async_message(owner_tid, f"✅ Canal vinculado como broadcaster.\n Ahora ejecuta /setgroup dentro del grupo objetivo."))
         return redirect("https://twitch.tv/")
     except Exception as e:
         logging.exception("Error in /twitch/setup/callback: %s", e)
@@ -410,7 +387,7 @@ async def ensure_valid_broadcaster_token(b_row) -> Tuple[str, str]:
     expires = b_row["token_expires_in"]
     if int(time.time()) < obtained + expires - 120:
         return access, b_row["broadcaster_id"]
-    # refresh
+
     logging.info("Refreshing broadcaster token…")
     tokens = await twitch_refresh_token(b_row["refresh_token"])
     access = tokens["access_token"]
@@ -426,7 +403,7 @@ async def create_or_get_invite_link(b_row) -> Optional[str]:
     group_id = b_row["group_id"]
     if not group_id:
         return None
-    # Prefer existing valid invite link
+
     if b_row["invite_link"]:
         return b_row["invite_link"]
     try:
@@ -438,7 +415,7 @@ async def create_or_get_invite_link(b_row) -> Optional[str]:
         return None
 
 async def check_and_notify_subscription(telegram_id: int, twitch_user_id: str, b_row):
-    # Ensure token alive
+
     try:
         access, broadcaster_id = await ensure_valid_broadcaster_token(b_row)
         is_sub = await twitch_check_subscription(access, broadcaster_id, twitch_user_id)
@@ -453,7 +430,7 @@ async def check_and_notify_subscription(telegram_id: int, twitch_user_id: str, b
         return
 
     if is_sub:
-        # get invite link
+
         link = await create_or_get_invite_link(b_row)
         if link:
             await ptb_app.bot.send_message(chat_id=telegram_id, text=f"🎉 ¡Estás suscrito! Únete al grupo aquí: {link}")
@@ -470,7 +447,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     if not u:
         return
-    # upsert telegram user
+
     await db_execute(
         "INSERT OR IGNORE INTO telegram_users(telegram_id, username, first_name, last_name, linked_twitch_id) VALUES (?,?,?,?,NULL)",
         u.id, u.username or "", u.first_name or "", u.last_name or "",
@@ -516,13 +493,13 @@ async def setgroup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ("group", "supergroup"):
         await update.effective_message.reply_text("Ejecuta /setgroup dentro del grupo objetivo (donde el bot sea admin).")
         return
-    # find broadcaster owned by this user
+
     b = await db_fetchone("SELECT * FROM broadcasters WHERE owner_telegram_id=? ORDER BY rowid DESC LIMIT 1", u.id)
     if not b:
         await update.effective_message.reply_text("No has configurado ningún broadcaster. Usa /setup primero en privado conmigo.")
         return
     try:
-        # Ensure bot admin & create invite
+
         link: ChatInviteLink = await context.bot.create_chat_invite_link(chat_id=chat.id, creates_join_request=False)
         await db_execute("UPDATE broadcasters SET group_id=?, invite_link=? WHERE broadcaster_id=?", chat.id, link.invite_link, b["broadcaster_id"])
         await update.effective_message.reply_text("✅ Grupo vinculado. A partir de ahora, los suscriptores recibirán este enlace de invitación.")
@@ -565,15 +542,15 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif status in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED):
         await db_execute("UPDATE group_members SET left_at=? WHERE group_id=? AND telegram_id=?", int(time.time()), chat.id, user.id)
 
-# ---------------------------
+# -------------------
 # Weekly audit job
-# ---------------------------
+# -------------------
 
 async def audit_group_and_kick(context: ContextTypes.DEFAULT_TYPE, b_row) -> int:
     group_id = b_row["group_id"]
     if not group_id:
         return 0
-    # collect linked users who appear in group
+
     rows = await db_fetchall(
         "SELECT gm.telegram_id, tu.linked_twitch_id FROM group_members gm JOIN telegram_users tu ON gm.telegram_id=tu.telegram_id "
         "WHERE gm.group_id=? AND gm.left_at IS NULL AND tu.linked_twitch_id IS NOT NULL",
@@ -582,7 +559,7 @@ async def audit_group_and_kick(context: ContextTypes.DEFAULT_TYPE, b_row) -> int
     if not rows:
         return 0
     kicked = 0
-    # ensure broadcaster token
+
     access, broadcaster_id = await ensure_valid_broadcaster_token(b_row)
     for r in rows:
         tg_id = r["telegram_id"]
@@ -616,12 +593,12 @@ async def weekly_audit_job(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.exception("Weekly audit failed for %s: %s", b["broadcaster_id"], e)
 
-# ---------------------------
-# Main
-# ---------------------------
+# --------------
+# Main código
+# --------------
 
 def run_flask():
-    # Use waitress (production WSGI server) and bind to Render's PORT
+
     from waitress import serve
     port = int(os.getenv("PORT", "8080"))
     logging.info(f"Starting Flask with waitress on port {port}…")
@@ -630,14 +607,12 @@ def run_flask():
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-    # Ensure a default asyncio event loop exists (Python 3.13 on Render may not create one by default)
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    # Initialize DB synchronously before PTB using the ensured event loop
     loop.run_until_complete(db_init())
 
     application = (
@@ -656,16 +631,16 @@ def main():
     application.add_handler(CommandHandler("auditnow", auditnow_cmd))
     application.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
 
-    # Jobs: weekly Monday 05:00 Europe/Madrid
+    # Jobs: Cada semana, el lunes 05:00 Europe/Madrid
     from zoneinfo import ZoneInfo
     from datetime import time as dtime
     tz = ZoneInfo(TZ)
-    # Configure JobQueue timezone if supported (PTB v21 removed the 'timezone' kw in run_daily)
+
     try:
         application.job_queue.scheduler.configure(timezone=tz)
     except Exception:
         try:
-            application.job_queue.timezone = tz  # fallback for other PTB versions
+            application.job_queue.timezone = tz  
         except Exception:
             pass
     application.job_queue.run_daily(
@@ -675,7 +650,6 @@ def main():
         name="weekly_audit",
     )
 
-    # Start Flask in background thread (waitress binds to Render's PORT)
     import threading
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
