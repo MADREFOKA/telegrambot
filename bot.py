@@ -463,7 +463,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     url = build_oauth_url_user(state)
     msg = (
-        f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click abajo. '<a href=\"{url}\">⬇️</a>'"
+        "Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click abajo.<br>"
+        f"<a href=\"{safe_url}\">⬇️</a>"
     )
     await update.effective_chat.send_message(msg,parse_mode="HTML", disable_web_page_preview=False)
 
@@ -662,4 +663,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("Bye!")
+
 
