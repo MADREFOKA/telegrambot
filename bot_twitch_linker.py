@@ -668,14 +668,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = build_oauth_url_user(state)
     safe_url = escape(url, quote=True)
     msg = (
-        f"Bienvenido al bot de subs Telegram–Twitch"
-        f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click '<a href=\"{safe_url}\">aquí</a>' y sabrás si puedes acceder al grupo de suscriptores."
+        "Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click abajo.<br>"
+        f"<a href=\"{safe_url}\">⬇️</a>"
     )
-    await update.effective_chat.send_message(
-        msg,
-        parse_mode="HTML",
-        disable_web_page_preview=False,
-    )
+    await update.effective_chat.send_message(msg,parse_mode="HTML", disable_web_page_preview=False)
 
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
@@ -696,8 +692,8 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = build_oauth_url_setup(state)
     safe_url = escape(url, quote=True)
     await update.effective_chat.send_message(
-        f"Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones."
-        f"Debes entrar con la cuenta del canal y aceptar el permiso <code>channel:read:subscriptions</code> haciendo click <a href=\"{safe_url}\">aquí</a>.",
+        f"Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.\n"
+        f"Debes entrar con la cuenta del canal y aceptar el permiso del bot haciendo click abajo.<a href=\"{url}\">⬇️</a>",
         parse_mode="HTML",
         disable_web_page_preview=False,
     )
