@@ -674,12 +674,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = build_oauth_url_user(state)
     safe_url = escape(url, quote=True) 
     msg = (
-        "Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click abajo.<br>"
+        "Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click abajo.\n"
         f"<a href=\"{safe_url}\">⬇️</a>"
     )
     logging.info("START -> %s", msg)
-    await update.effective_chat.send_message(msg, parse_mode="HTML", disable_web_page_preview=False, 
-    )
+    await update.effective_chat.send_message(msg, parse_mode="HTML", disable_web_page_preview=False,)
 
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
