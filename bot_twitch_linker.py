@@ -506,7 +506,7 @@ def twitch_callback_user():
         # Find broadcaster config (latest by token time)
         b = asyncio.run(db_fetchone("SELECT * FROM broadcasters ORDER BY token_obtained_at DESC LIMIT 1"))
         if not b:
-            asyncio.run(send_async_message(telegram_id, "Aún no hay ningún canal de Twitch configurado. Pide al dueño que ejecute /setup."))
+            asyncio.run(send_async_message(telegram_id, "Aún no hay ningún canal de Twitch configurado. Pide al streamer que haga la configuración"))
             return redirect("https://twitch.tv/")
         # Check subscription asynchronously on PTB loop
         if ptb_loop is not None:
@@ -635,43 +635,51 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     if not u:
         return
-    # upsert telegram user
+
     if USE_PG:
         await db_execute(
-            "INSERT INTO telegram_users(telegram_id, username, first_name, last_name) VALUES (?,?,?,?) "
-            "ON CONFLICT (telegram_id) DO NOTHING",
+            "INSERT INTO telegram_users(telegram_id, username, first_name, last_name) "
+            "VALUES (%s,%s,%s,%s) "
+            "ON CONFLICT (telegram_id) DO UPDATE SET "
+            "username=EXCLUDED.username, first_name=EXCLUDED.first_name, last_name=EXCLUDED.last_name",
             u.id, u.username or "", u.first_name or "", u.last_name or "",
         )
     else:
         await db_execute(
-            "INSERT OR IGNORE INTO telegram_users(telegram_id, username, first_name, last_name, linked_twitch_id) VALUES (?,?,?,?,NULL)",
+            "INSERT OR IGNORE INTO telegram_users(telegram_id, username, first_name, last_name, linked_twitch_id) "
+            "VALUES (?,?,?,?,NULL)",
             u.id, u.username or "", u.first_name or "", u.last_name or "",
         )
-    await db_execute(
-        "UPDATE telegram_users SET username=?, first_name=?, last_name=? WHERE telegram_id=?",
-        u.username or "", u.first_name or "", u.last_name or "", u.id
-    )
+        await db_execute(
+            "UPDATE telegram_users SET username=?, first_name=?, last_name=? WHERE telegram_id=?",
+            u.username or "", u.first_name or "", u.last_name or "", u.id
+        )
 
     state = gen_state()
+    created = int(time.time())
     if USE_PG:
         await db_execute(
-            "INSERT INTO oauth_states(state, telegram_id, purpose, created_at) VALUES (?,?,?,?) "
-            "ON CONFLICT (state) DO UPDATE SET telegram_id=EXCLUDED.telegram_id, purpose=EXCLUDED.purpose, created_at=EXCLUDED.created_at",
-            state, u.id, "user_link", int(time.time())
+            "INSERT INTO oauth_states(state, telegram_id, purpose, created_at) "
+            "VALUES (%s,%s,%s,%s) "
+            "ON CONFLICT (state) DO UPDATE SET "
+            "telegram_id=EXCLUDED.telegram_id, purpose=EXCLUDED.purpose, created_at=EXCLUDED.created_at",
+            state, u.id, "user_link", created
         )
     else:
         await db_execute(
             "INSERT OR REPLACE INTO oauth_states(state, telegram_id, purpose, created_at) VALUES (?,?,?,?)",
-            state, u.id, "user_link", int(time.time())
+            state, u.id, "user_link", created
         )
 
     url = build_oauth_url_user(state)
-    safe_url = escape(url, quote=True)
+    safe_url = escape(url, quote=True) 
     msg = (
         "Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click abajo.<br>"
         f"<a href=\"{safe_url}\">⬇️</a>"
     )
-    await update.effective_chat.send_message(msg,parse_mode="HTML", disable_web_page_preview=False)
+    logging.info("START -> %s", msg)
+    await update.effective_chat.send_message(msg, parse_mode="HTML", disable_web_page_preview=False, 
+    )
 
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
