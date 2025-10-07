@@ -463,8 +463,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     url = build_oauth_url_user(state)
     msg = (
-        f"Bienvenido al bot de subs Telegram–Twitch\n"
-        f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click '<a href=\"{url}\">aquí</a>'."
+        f"Para vincular tu cuenta de Twitch y comprobar si estás suscrito, haz click abajo. '<a href=\"{url}\">⬇️</a>'"
     )
     await update.effective_chat.send_message(msg,parse_mode="HTML", disable_web_page_preview=False)
 
@@ -480,7 +479,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = build_oauth_url_setup(state)
     await update.effective_chat.send_message(
         f"Vincula el canal de Twitch que administras para permitir que el bot lea suscripciones.\n"
-        f"Debes entrar con la cuenta del canal y aceptar el permiso <code>channel:read:subscriptions</code> haciendo click <a href=\"{url}\">aquí</a>.",
+        f"Debes entrar con la cuenta del canal y aceptar el permiso del bot haciendo click abajo.<a href=\"{url}\">⬇️</a>",
         parse_mode="HTML",
         disable_web_page_preview=False,
     )
@@ -496,7 +495,7 @@ async def setgroup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     b = await db_fetchone("SELECT * FROM broadcasters WHERE owner_telegram_id=? ORDER BY rowid DESC LIMIT 1", u.id)
     if not b:
-        await update.effective_message.reply_text("No has configurado ningún broadcaster. Usa /setup primero en privado conmigo.")
+        await update.effective_message.reply_text("No hay configurado ningún stream. Pide al streamer que haga la configuración.")
         return
     try:
 
@@ -515,7 +514,7 @@ async def checkme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     b = await db_fetchone("SELECT * FROM broadcasters ORDER BY rowid DESC LIMIT 1")
     if not b:
-        await update.effective_message.reply_text("Aún no hay ningún canal configurado. Pide al admin que use /setup.")
+        await update.effective_message.reply_text("Aún no hay ningún canal configurado. Pide al streamer que haga la configuración.")
         return
     await check_and_notify_subscription(u.id, row["linked_twitch_id"], b)
 
@@ -663,3 +662,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("Bye!")
+
